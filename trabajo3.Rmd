@@ -4,7 +4,7 @@ subtitle: "Trabajo 3. Análisis de Series de Tiempo"
 author: "Bladimir Valerio Morales Torrez"
 date: "Enero 2022"
 output: 
-  pdf_document:
+  html_document:
       toc: yes
       toc_float: yes
       number_section: yes
@@ -14,27 +14,563 @@ editor_options:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE,warning = FALSE)
-
+library(tidyverse)
+library(forecast)
+library(KFAS)
+library(tseries)
 ```
 
 \newpage
 
-## R Markdown
+# Introducción
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Para este trabajo de análisis de series de tiempo se aplicarán técnicas de modelamiento en series temporales, específicamente los modelos de Espacio Estado.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+La serie de tiempo de estudio para este trabajo es:
 
-```{r cars}
-summary(cars)
+* Indice de consumo de agua potable ICAP (enero 1990 a julio 2021).
+
+Se puede encontrar el repositorio de datos y del informe en el siguiente enlace (https://github.com/bladimir-morales/modelo_espacio_estado).
+
+Se puede visualizar el presente informe en formato pdf, en el siguiente enlace:
+
+- https://bladimir-morales.github.io/modelo_espacio_estado/trabajo3.pdf
+
+Se puede visualizar el presente informe en formato html, en el siguiente enlace:
+
+- https://bladimir-morales.github.io/modelo_espacio_estado/trabajo3.html
+
+
+# Indice de consumo de agua potable ICAP
+
+## Datos
+
+El indice mensual de consumo de agua potable de Bolivia ICAP, es un indicador que nos permite conocer *la evolución y comportamiento* del consumo de agua potable de los sectores privado y público a nivel general con año base de 1990, así para este año el indice será igual a 100 y para las siguientes gestiones presentará una variación (incremento o decremento) respecto al año base de acuerdo al consumo de agua potable del mes a tratarse. 
+
+## Periodo de estudio
+
+La serie de tiempo esta con periodicidad mensual, comprendidos desde enero de 1990 hasta julio de 2021, teniendo en total 379 observaciones.
+
+## Fuente de datos
+
+La información del indice mensual de consumo de agua potable de Bolivia se puede encontrar en la página oficial del Instituto Nacional de Estadística (INE)^[www.ine.gob.bo], sección de "Estadísticas Económicas" y subsección "Servicios básicos". Específicamente se puede descargar los datos en formato establecido por la institución en excel del siguiente enlace: (https://nube.ine.gob.bo/index.php/s/M1H9axannIL7leg/download).
+
+Los metadatos están disponibles en el Catálogo del Archivo Nacional de Datos (ANDA) del INE (http://anda4.ine.gob.bo/ANDA4_2/index.php/catalog/254).
+
+Para fines prácticos se puso la variable en estudio en formato *.txt, el cual puede ser descargada del siguiente enlace (https://raw.githubusercontent.com/bladimir-morales/series_de_tiempo/main/data/agua.txt).
+
+# Gráfico
+
+```{r}
+url<-"https://raw.githubusercontent.com/bladimir-morales/modelos_box_jenkins/main/agua.txt?token=AOEHMZISFJOYBMKYVNZE2RLB2VRR4"
+agua<-read.table(url,head=T)
+serie<-ts(agua$agua,start = c(1990,1),frequency = 12)
+
+autoplot(serie,series = "ICAP")+
+  ggtitle("Indice mensual de consumo de agua potable en Bolivia: enero 1990 a julio 2021 \n 
+          (año base 1990=100)")+
+  xlab("Año")+ylab("ICAP")+
+  scale_color_manual(values="#2B7DFF")+
+  theme(legend.position = "none")
 ```
 
-## Including Plots
+En el gráfico visualmente se puede observar que la serie de tiempo en estudio tendría tendencia aditiva y un posible efecto estacional. 
 
-You can also embed plots, for example:
+# Datos de entrenamiento y test
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+Para efectos de obtener un modelo óptimo y lo más preciso posible, se dividirá la serie de tiempo en dos conjuntos:
+
+* Conjunto de datos de entrenamiento: 
+
+Se tomará en cuenta los datos desde enero de 1990 hasta diciembre de 2019, contando con 360 observaciones.
+
+* Conjunto de datos de test.
+
+Se tomará en cuenta los datos desde enero de 2020 hasta julio de 2021, contando con 19 observaciones.
+
+En el siguiente gráfico se puede observar la serie de entrenamiento y de test.
+
+```{r}
+serie_ent<-ts(agua$agua,start = c(1990,1),end = c(2019,12), frequency=12)
+serie_test<-ts(agua$agua[361:379],start = c(2020,1), frequency=12)
+
+autoplot(serie_ent,series = "ICAP entrenamiento")+
+  autolayer(serie_test,series="ICAP test")+
+  ggtitle("Conjunto de entrenamiento y test del ICAP")+
+  xlab("Año")+ylab("ICAP")+
+  scale_color_manual(values=c("#469F4B","#A462EF"))+
+  theme(legend.position = "bottom",legend.title = element_blank() )
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# Ajuste del Modelo de Espacio Estado
+
+En busca del mejor modelo para la serie de tiempo se estimará los siguientes tres modelos:
+
+  - Local Linear Trend Model
+  - Local Level Model with Seasonal
+  - Local Linear Trend Model with Seasonal
+  
+Se utilizará en base a los datos de la serie de entrenamiento aplicando logaritmo y posteriormente se verifica que sea un modelo de espacio estado.
+
+Mencionar que el criterio de selección será el Cireterio de Información de Akaike AIC, denotado como:
+
+$$AIC=\frac{1}{n}[-2n(log L_d) +2(q+w)]$$
+donde $n$ es el número de observaciones en la serie temporal, $log L_d$ es el valor de la función de verosimilitud logarítmica difusa que se maximiza en el estado, $q$ es el número de valores iniciales difusos en el estado, y
+$w$ es el número total de varianzas de perturbación estimadas en el análisis.
+Cuando se comparan diferentes modelos con el AIC se cumple la siguiente regla los valores más pequeños denotan modelos que se ajustan mejor que los más grandes.
+
+## Local Linear Trend Model 
+
+### Ajuste del modelo
+
+```{r}
+log_serie_ent<-log(serie_ent)
+mod1 <- SSModel(log_serie_ent ~SSMtrend(degree=2, Q=list(NA,NA),a1=c(0,0)),H=NA)
+is.SSModel(mod1)
+mod1$H
+mod1$Q
+```
+
+```{r}
+mod1e<-fitSSM(mod1,inits=c(log(var(serie_ent)),log(var(serie_ent)),log(var(serie_ent))), method="BFGS")
+mod1e
+```
+
+La varianza de $\varepsilon$ es:
+
+```{r}
+mod1e$model["H"]
+```
+
+La varianza de $\eta$ es:
+
+```{r}
+mod1e$model["Q"]
+```
+
+Se estima los parámteros del modelo.
+
+```{r}
+out1 <- KFS(mod1e$model, filtering = "state", smoothing = "state")
+att1 <- out1$att#filtraje
+alphahat1 <- out1$alphahat#suavizado
+```
+
+### Gráfico de la serie estimada
+
+```{r}
+autoplot(log_serie_ent,series="Logaritmo de ICAP entrenamiento")+
+  autolayer(fitted(mod1e$model),series = "Ajustado")+
+  autolayer(alphahat1[,1],series = "Local Level")+
+  ggtitle("Log ICAP, Modelo Ajustado y Local Level")+
+  xlab("Año")+ylab("log ICAP")+
+  scale_color_manual(values=c("#E80808","#3301FF","#A4C4FC"))+
+  theme(legend.position = "bottom",legend.title = element_blank() )
+```
+
+### AIC
+
+```{r}
+aic_mod1<-(1/length(log_serie_ent))*( (-2*length(log_serie_ent)*out1$logLik)+(2*(3+2)))
+aic_mod1
+```
+
+
+## Local Level Model with Seasonal
+
+### Ajuste del modelo
+
+```{r}
+mod2 <- SSModel(log_serie_ent ~ SSMtrend(1, Q = list(NA))+
+                           SSMseasonal(period = 12, sea.type = "trigonometric", Q = NA), H = NA)
+ 
+is.SSModel(mod2)
+# varianza de Epsilon
+mod2["H"]
+#varianza de eta
+mod2["Q"]
+```
+
+
+```{r}
+ownupdatefn <- function(pars, model){
+  model$H[] <- exp(pars[1])
+  diag(model$Q[, , 1]) <- exp(c(pars[2], rep(pars[3], 11)))
+  model 
+  }
+
+mod2e <- fitSSM(mod2,log(c(var(serie_ent),var(serie_ent), var(serie_ent))),ownupdatefn, method = "BFGS")
+mod2e
+```
+
+La varianza de $\varepsilon$ es:
+
+```{r}
+mod2e$model["H"]
+```
+
+La varianza de $\eta$ es:
+
+```{r}
+mod2e$model$Q
+```
+
+Se estima los parámteros del modelo.
+
+```{r}
+out2 <- KFS(mod2e$model, filtering = "state", smoothing = "state")
+att2 <- out2$att#filtraje
+alphahat2 <- out2$alphahat#suavizado
+```
+
+### Gráfico de la serie estimada
+
+```{r}
+autoplot(log_serie_ent,series="Logaritmo de ICAP entrenamiento")+
+  autolayer(fitted(mod2e$model),series = "Ajustado")+
+  autolayer(alphahat2[,1],series = "Local Level")+
+  ggtitle("Log ICAP, Modelo Ajustado y Local Level")+
+  xlab("Año")+ylab("log ICAP")+
+  scale_color_manual(values=c("#E80808","#3301FF","#A4C4FC"))+
+  theme(legend.position = "bottom",legend.title = element_blank() )
+```
+
+
+### AIC 
+
+```{r}
+aic_mod2<-(1/length(log_serie_ent))*( (-2*length(log_serie_ent)*out2$logLik)+(2*(3+12)))
+aic_mod2
+```
+
+## Local Linear Trend Model with Seasonal
+
+### Ajuste del modelo
+
+```{r}
+mod3 <- SSModel(log_serie_ent ~ SSMtrend(2, Q = list(NA,NA))+
+                           SSMseasonal(period = 12, sea.type = "trigonometric", Q = NA), H = NA)
+ 
+is.SSModel(mod3)
+# varianza de Epsilon
+mod3["H"]
+#vaianza de eta
+mod3["Q"]
+```
+
+```{r}
+ownupdatefn <- function(pars, model){
+  model$H[] <- exp(pars[1])
+  diag(model$Q[, , 1]) <- exp(c(pars[2],pars[3], rep(pars[4], 11)))
+  model 
+}
+
+mod3e <- fitSSM(mod3,log(c(var(serie_ent),var(serie_ent), var(serie_ent),var(serie_ent))),
+                      ownupdatefn, method = "BFGS")
+mod3e
+```
+
+La varianza de $\varepsilon$ es:
+
+```{r}
+mod3e$model["H"]
+```
+
+La varianza de $\eta$ es:
+
+```{r}
+mod3e$model$Q
+```
+
+Se estima los parámteros del modelo.
+
+```{r}
+out3 <- KFS(mod3e$model, filtering = "state", smoothing = "state")
+att3 <- out3$att
+alphahat3 <- out3$alphahat
+```
+
+### Gráfico de la serie estimada
+
+```{r}
+autoplot(log_serie_ent,series="Logaritmo de ICAP entrenamiento")+
+  autolayer(fitted(mod3e$model),series = "Ajustado")+
+  autolayer(alphahat3[,1],series = "Local Level")+
+  ggtitle("Log ICAP, Modelo Ajustado y Local Level")+
+  xlab("Año")+ylab("log ICAP")+
+  scale_color_manual(values=c("#E80808","#3301FF","#A4C4FC"))+
+  theme(legend.position = "bottom",legend.title = element_blank() )
+```
+
+### AIC 
+
+```{r}
+aic_mod3<-(1/length(log_serie_ent))*( (-2*length(log_serie_ent)*out3$logLik)+(2*(4+13)))
+aic_mod3
+```
+
+## Decisión 
+
+Si se compara los tres modelos de espacio estado en sus valores de AIC se tiene:
+
+  - Local Linear Trend Model $AIC=$`r aic_mod1`
+  - Local Level Model with Seasonal $AIC=$`r aic_mod2`
+  - Local Linear Trend Model with Seasonal $AIC=$`r aic_mod3`
+
+Se puede ver que los menores valores de AIC son del modelo *Local Level Model with Seasonal* y *Local Linear Trend Model with Seasonal* teniendo una diferencia de $2.066$ puntos. 
+
+Por tal motivo se eligirá el modelo *Local Level model with Seasonal* ya que tiene el menor AIC y al estimar menos parámetros es más parsimonioso.
+
+## Validación de supuestos
+
+### Análisis de residuos
+
+Se gráfica las innovaciones.
+
+```{r}
+innovaciones <- out2$v
+innovaciones <- innovaciones[13:length(innovaciones)]
+plot.ts(innovaciones ,main="Innovaciones",ylab="Innovaciones",xlab="Tiempo")
+```
+
+Se gráfica loa residuos.
+
+```{r}
+F1 <- as.numeric(out2$F[1:length(innovaciones)])
+residuos <- innovaciones/sqrt(F1)
+plot.ts(residuos)
+```
+
+### Independencia de Residuos
+
+- **FAC y FACP**
+
+En primera instancia los residuos deben ser semejantes a un ruido blanco, donde los coeficientes estimados de la FAC y FACP no deben ser significativamente distintos de cero.
+
+```{r}
+par(mfrow=c(1,2))
+acf(residuos)
+pacf(residuos)
+```
+
+Coomo se puede visualizar no todos los coeficientes estimados de la FAC y FACP de los residuos son aproximadamente cero, no teniendo un posible ruido blanco.
+
+- **Dócima de Box-Pierce y Ljung-Box**
+
+Se utilizará en primera instancia la prueba de Box-Pierce y Ljung-Box que tienen como hipótesis:
+
+$$H_0:\rho_1=\rho_2=...=\rho_k=0 \text{  (independencia)}$$
+
+```{r}
+Box.test(residuos,type = "Box-Pierce")
+```
+
+Para la prueba de Box-Pierce no se rechaza $H_0$ teniendo así independencia en los residuos.
+
+```{r}
+Box.test(residuos,type = "Ljung-Box")
+```
+
+Para la prueba de Ljung-Box no se rechaza $H_0$ teniendo así independencia en los residuos.
+
+**Conclusión: ** Existe evidencia estadística para decir que los residuos son independientes.
+
+### Normalidad de Residuos
+
+Se verifica en los residuos QQ-normal y el histograma.
+
+```{r}
+par(mfrow=c(1,2))
+qqnorm(residuos)
+hist(residuos)
+```
+
+Se puede observar la existencia de datos atípicos, efectivamente si se ven los residuos a más detalle existe un valor atípico en diciembre del 2016, el cual se mencionó en el estudio de tendencia un decaimiento bastante fuerte a lo usual de la serie temporal. Este valor atípico puede que este produciendo algún tipo de sesgo en el estudio de normalidad. 
+
+```{r}
+atipico<-which.min(residuos)
+par(mfrow=c(1,2))
+qqnorm(residuos[-atipico])
+hist(residuos[-atipico])
+```
+
+Visualmente al quitar este valor atípico se puede observar que posiblemente exista normalidad en los residuos. Para poder determinar el mismo se realizarán las dócimas de normalidad con este valor atípico y sin él.
+
+Se realizará las pruebas de normalidad.
+
+- **Dócima de Jarque-Bera**
+
+La dócima de Jarque-Bera tiene la siguiente hipótesis nula
+
+$$H_0: \text{ Los residuos son normales}$$
+```{r}
+normtest::jb.norm.test(residuos)
+```
+
+Se rechaza la hipótesis nula donde se concluye que los residuos no cumplen normalidad como se pudo observar en el gráfico.
+
+```{r}
+normtest::jb.norm.test(residuos[-atipico])
+```
+
+Sin contar con este dato se puede observar que aún se rechaza la hipótesis nula, no teniendo normalidad en los residuos, pero el p-valor esta mas cercano a $0.05$
+
+- **Dócima de Shapiro-Wilk**
+
+La dócima de Shapiro-Wilk tiene la siguiente hipótesis nula
+
+$$H_0: \text{La distribución es normal}$$
+
+```{r}
+shapiro.test(residuos)
+```
+
+Se rechaza la hipótesis nula donde se concluye que los residuos no cumplen normalidad.
+
+```{r}
+shapiro.test(residuos[-atipico])
+```
+
+No se rechaza la hipótesis nula donde se concluye que los residuos cumplen normalidad.
+
+**Conclusión: **Se puede evidenciar que no existe normalidad en los residuos teniendo en cuenta el valor atípico sucitado en diciembre del 2016. No tomando en cuenta este valor la dócima de Jarque-Bera aún determina no normalidad mientras que la dócima de Shapiro Wilk determina que los residuos son normales, cumpliendo así este supuesto.
+
+### Homocedasticidad de Residuos
+
+Se hará primero un análisis gráfico.
+
+```{r}
+ajustados<-fitted(mod2e$model)
+plot(ajustados[13:length(ajustados)],residuos,xlab="Ajustados")
+```
+
+Se puede evidenciar que existe un valor atípico el cual corresponde a diciembre del 2016, pero según el gráfico existiria homocedasticidad.
+
+Ahora se calculará el estadístico $H(h)$, donde  $h$ es el entero más próximo a $(n-q)/3$ y $q$ es el número de inicializaciones difusas y se compara con una $F(h,h)$.
+
+```{r}
+H <- function(innovations){ 
+  n <- length(innovations) 
+  d <- 1
+  h <- round((n-d)/3)
+  H <- sum(innovations[(n-h+1):n]^2)/sum(innovations[(d+1):(d+h)]^2)
+  cat("El valor del estadístico es H=", H, "y el valor crítico es", qf(0.95,h,h))
+  }
+H(residuos)
+```
+
+Como el valor $H$ es menor al valor crítico se dice que hay homocedasticidad.
+
+**Conclusión: ** Existe evidencia estadística para decir que los residuos son homocedasticos, no presentando así heterocedasticidad.
+
+## Conclusión ajuste del modelo
+
+Se puede concluir entonces que el modelo elegido *Local Level Model with Seasonal* tiene el menor AIC y cumple los supuestos de independencia y homocedasticidad, en cuanto a la normalidad sin contar con el valor atípico del 2016 se puede asumir este supuesto con la prueba de Shapiro-Wilk. 
+
+# Gráfico serie original y el ajustado
+
+Primero gráficamos la serie del ICAP aplicado a logaritmo y el ajuste del modelo *Local Level Model with Seasonal*
+
+```{r}
+autoplot(log_serie_ent,series="log ICAP entrenamiento")+
+  autolayer(ajustados,series = "Ajustado")+
+  ggtitle("Log ICAP y Modelo Ajustado")+
+  xlab("Año")+ylab("log ICAP")+
+  scale_color_manual(values=c("#A4C4FC","#E80808"))+
+  theme(legend.position = "bottom",legend.title = element_blank() )
+```
+
+Ahora gráficamos la serie original del ICAP y el inverso del logaritmo (exponencial) al modelo ajustado.
+
+```{r}
+autoplot(serie_ent,series="ICAP entrenamiento")+
+  autolayer(exp(ajustados),series = "exp[ajustado]")+
+  ggtitle("ICAP y Exponencial del Modelo Ajustado")+
+  xlab("Año")+ylab("log ICAP")+
+  scale_color_manual(values=c("#A4C4FC","#E80808"))+
+  theme(legend.position = "bottom",legend.title = element_blank() )
+```
+
+# Predicción 
+
+Se realizará la predicción para el conjunto test del ICAP.
+
+```{r}
+mod2_pred <- SSModel(log_serie_ent ~ SSMtrend(
+  2,Q = list(mod2e$model$Q[,,1][1,1],mod2e$model$Q[,,1][2,2]))+
+    SSMseasonal(period = 12, 
+                sea.type = "trigonometric", Q = mod2e$model$Q[,,1][3,3]), H =mod2e$model$H)
+
+
+pred <- predict(mod2_pred,n.ahead=19,interval="prediction",level=0.95)
+pred
+```
+
+Primero gráficamos la serie del ICAP tanto de entrenamiento como de test aplicado a logaritmo y el ajuste del modelo *Local Level Model with Seasonal* más su predicción. 
+
+```{r}
+autoplot(log_serie_ent,series="log ICAP")+
+  autolayer(ajustados,series = "Ajustados")+
+  autolayer(pred[,1],series = "Predicción")+
+  autolayer(log(serie_test),series = "log ICAP test")+
+  ggtitle("Log ICAP y Modelo Ajustado más predicción")+
+  xlab("Año")+ylab("log ICAP")+
+  scale_color_manual(values=c("#A4C4FC","#0D139B","#189B0D","#E80808"))+
+  theme(legend.position = "bottom",legend.title = element_blank() )
+```
+
+Ahora gráficamos la serie original del ICAP tanto de entrenamiento como de test y el inverso del logaritmo (exponencial) al modelo ajustado más su predicción.
+
+```{r}
+autoplot(serie_ent,series="ICAP entrenamiento")+
+  autolayer(exp(ajustados),series = "exp[Ajustados]")+
+  autolayer(exp(pred[,1]),series = "exp[Predicción]")+
+  autolayer(serie_test,series = "ICAP test")+
+  ggtitle("ICAP y Exponencial del Modelo Ajustado más predicción")+
+  xlab("Año")+ylab("log ICAP")+
+  scale_color_manual(values=c("#189B0D","#E80808","#A4C4FC","#0D139B"))+
+  theme(legend.position = "bottom",legend.title = element_blank() )
+```
+
+# MAPE
+
+Se calcula el MAPE para la predicción de los datos del conjunto del test aplicados a logaritmo.
+
+```{r}
+mape<-function(y,f){
+  pe<-((y-f)/y)
+  mape1<-(sum(abs(pe))/length(y))*100
+  return(mape1)
+}
+mape(log(serie_test),pred[,1])
+```
+
+Se calcula el MAPE para la predicción de los datos del conjunto del test originales y aplicando exponente a los predichos.
+
+```{r}
+mape_test<-mape(serie_test,exp(pred[,1]))
+mape_test
+```
+
+El MAPE es igual a `r mape_test`, esto aplicado a la exponencial de las predicciones.
+
+# Comparación de la predicción
+
+El MAPE obtenido en el primer trabajo por el método de suavizamiento exponencial específicamente al modelo Holt-Winters aplicado a la serie de test fue de $4.5956761$, en el segundo trabajo el MAPE obtenido por el modelo $SARIMA(0,1,1)(1,0,1)_{12}$ de Box y Jenkins fue $4.6803368$ y por último el MAPE obtenido por el modelo *Local Level Model with Seasonal* de espacio estado es `r mape_test`.
+
+Por tal motivo se concluye que el mejor modelo que ajusta los datos del ICAP de Bolivia es el modelo de espacio estado específicamente el *Local Level Model with Seasonal*.
+
+
+# Conclusiones
+
+Se estudio la serie temporal del indice de consumo de agua potable en Bolivia desde el periodo de enero de
+1990 hasta julio del 2021, teniendo en total $379$ observaciones con periodicidad mensual, existiendo un valor
+atípico en diciembre del 2016. 
+
+Se transformó la serie con logaritmo para estabilizar varianza y se ajustó tres modelos de espacio estado siendo el mejor el *Local Level Model with Seasonal* presentando el menor AIC de todos los propuestos, se realizó la validación de supuestos teniendo así independencia y homocedasticidad en los residuos. En cuanto a la
+normalidad es necesario comentar que no cumple este supuesto al tener el dato atípico de diciembre de 2016,
+obviando este dato el supuesto de normalidad en los residuos se cumple con la dócima de Shapiro Wilk.
+
+Al pronosticar los datos con el modelo *Local Level Model with Seasonal* y obtener el MAPE del mismo, al comparar
+con el de Holt Winters y $SARIMA(0,1,1)(1,0,1)_{12}$ realizado en anteriores trabajos, se pudo evidenciar que el menor MAPE lo tiene el de Espacio Estado específicamente *Local Level Model with Seasonal*, siendo así este el modelo óptimo de las tres metodologías propuestas para realizar pronósticos a la serie del ICAP de Bolivia.
+
